@@ -1,4 +1,3 @@
 # (WIP)
 
-Run:
-[Start here](https://denv3rr.github.io/particles/)
+[Start](https://denv3rr.github.io/particles/)

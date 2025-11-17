@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Molecular Lattice & Thermal Simulation</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #111;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            color: white;
+        }
+        canvas {
+            display: block;
+        }
+        #controls {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(30, 30, 30, 0.9);
+            padding: 15px;
+            border-radius: 8px;
+            border: 1px solid #444;
+            width: 280px;
+            backdrop-filter: blur(5px);
+            box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+        }
+        h2 { margin: 0 0 10px 0; font-size: 1.1rem; color: #eee; }
+        .control-group { margin-bottom: 12px; }
+        label { display: flex; justify-content: space-between; font-size: 0.85rem; color: #aaa; }
+        input[type=range] { width: 100%; margin-top: 5px; cursor: pointer; }
+        select { width: 100%; padding: 5px; background: #333; color: white; border: 1px solid #555; border-radius: 4px; }
+        button {
+            width: 100%;
+            padding: 8px;
+            background: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+            margin-top: 5px;
+        }
+        button:hover { background: #0056b3; }
+        .legend {
+            display: flex;
+            justify-content: space-between;
+            margin-top: 10px;
+            font-size: 0.7rem;
+            background: linear-gradient(90deg, #33ccff, #33ff77, #ffcc00, #ff3333);
+            height: 8px;
+            border-radius: 4px;
+        }
+        .legend-labels {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.75rem;
+            margin-top: 2px;
+            color: #ccc;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="controls">
+        <h2>Molecular Dynamics</h2>
+        
+        <div class="control-group">
+            <label>Material Preset</label>
+            <select id="materialSelect">
+                <option value="iron">Iron (Strong Lattice)</option>
+                <option value="gold">Gold (Malleable/Heavy)</option>
+                <option value="fluid">Water/Fluid (Loose)</option>
+                <option value="gas">Volatile Gas (Repulsive)</option>
+            </select>
+        </div>
+
+        <div class="control-group">
+            <label>Ambient Temp (Energy) <span id="tempVal">0</span></label>
+            <input type="range" id="tempSlider" min="0" max="100" value="10">
+        </div>
+
+        <div class="control-group">
+            <label>Inter-Molecular Force <span id="bondVal">High</span></label>
+            <input type="range" id="bondSlider" min="0" max="100" value="80">
+        </div>
+
+        <div class="control-group">
+            <label>Gravity</label>
+            <input type="range" id="gravitySlider" min="0" max="20" value="5">
+        </div>
+
+        <div class="control-group">
+            <button id="resetBtn">Reset Lattice</button>
+        </div>
+
+        <div style="margin-top: 15px; font-size: 0.8rem; color: #ddd;">
+            <strong>Instructions:</strong><br>
+            • <b>Click & Drag</b> to inject HEAT into the system.<br>
+            • Observe rows sliding (slip planes).<br>
+            • High heat breaks the lattice.
+        </div>
+
+        <div class="legend"></div>
+        <div class="legend-labels">
+            <span>Cold</span>
+            <span>Hot</span>
+        </div>
+    </div>
+
+    <canvas id="simCanvas"></canvas>
+
+<script>
+/**
+ * SIMULATION CONFIGURATION
+ */
+const canvas = document.getElementById('simCanvas');
+const ctx = canvas.getContext('2d');
+
+let particles = [];
+const PARTICLE_RADIUS = 6;
+const SPACING = 14; // Distance between centers in lattice
+const ROWS = 25;
+const COLS = 30;
+
+// Physics State
+let physicsParams = {
+    gravity: 0.05,
+    friction: 0.96,
+    repulsion: 1.5,    // Push apart when too close
+    attraction: 0.02,  // Pull together (Van der Waals / Bonding)
+    interactionRadius: 35,
+    jitter: 0.05       // Ambient temperature noise
+};
+
+// Mouse State
+const mouse = { x: -1000, y: -1000, isDown: false };
+
+/**
+ * MATERIAL PRESETS
+ */
+const materials = {
+    iron: { attraction: 0.03, repulsion: 2.0, friction: 0.95, gravity: 0.05, colorBase: 210 }, // Blueish
+    gold: { attraction: 0.02, repulsion: 1.5, friction: 0.98, gravity: 0.2, colorBase: 50 },   // Yellowish
+    fluid: { attraction: 0.008, repulsion: 1.0, friction: 0.99, gravity: 0.02, colorBase: 180 }, // Cyan
+    gas:   { attraction: -0.005, repulsion: 3.0, friction: 1.0, gravity: -0.01, colorBase: 280 } // Purple
+};
+
+/**
+ * PARTICLE CLASS
+ */
+class Particle {
+    constructor(x, y) {
+        this.x = x;
+        this.y = y;
+        this.vx = 0;
+        this.vy = 0;
+        // Store previous positions for verlet-ish stabilization or visual trails (optional)
+        this.temp = 0; // Represents kinetic energy
+    }
+
+    update() {
+        // 1. Apply Forces from Controls
+        this.vy += physicsParams.gravity;
+        
+        // 2. Apply Ambient Temperature (Random Brownian Motion)
+        this.vx += (Math.random() - 0.5) * physicsParams.jitter;
+        this.vy += (Math.random() - 0.5) * physicsParams.jitter;
+
+        // 3. Mouse Interaction (Heat Injection)
+        if (mouse.isDown) {
+            const dx = this.x - mouse.x;
+            const dy = this.y - mouse.y;
+            const dist = Math.sqrt(dx*dx + dy*dy);
+            
+            // Heat radius
+            if (dist < 100) {
+                const force = (100 - dist) / 100;
+                // Push away slightly
+                this.vx += (dx / dist) * force * 2;
+                this.vy += (dy / dist) * force * 2;
+                // Add chaotic energy (Heat)
+                this.vx += (Math.random() - 0.5) * 5; 
+                this.vy += (Math.random() - 0.5) * 5;
+            }
+        }
+
+        // 4. Update Position
+        this.x += this.vx;
+        this.y += this.vy;
+
+        // 5. Apply Friction/Damping
+        this.vx *= physicsParams.friction;
+        this.vy *= physicsParams.friction;
+
+        // 6. Boundary Constraints (Walls)
+        const dampening = 0.7;
+        if (this.x < PARTICLE_RADIUS) { this.x = PARTICLE_RADIUS; this.vx *= -dampening; }
+        if (this.x > canvas.width - PARTICLE_RADIUS) { this.x = canvas.width - PARTICLE_RADIUS; this.vx *= -dampening; }
+        if (this.y < PARTICLE_RADIUS) { this.y = PARTICLE_RADIUS; this.vy *= -dampening; }
+        if (this.y > canvas.height - PARTICLE_RADIUS) { this.y = canvas.height - PARTICLE_RADIUS; this.vy *= -dampening; }
+
+        // Calculate "Temperature" for visualization based on speed
+        const speed = Math.sqrt(this.vx*this.vx + this.vy*this.vy);
+        // Smooth the temp reading
+        this.temp = this.temp * 0.9 + speed * 0.1; 
+    }
+
+    draw() {
+        // Color Mapping: Low Temp = Material Color, High Temp = Red/White
+        // We shift hue towards red (0) and lightness towards 100% as temp rises
+        
+        let hue = materials[document.getElementById('materialSelect').value].colorBase;
+        let sat = 70;
+        let light = 50;
+
+        // Heat visualization
+        // As temp goes up, Hue shifts toward Red (0 or 360)
+        // We simulate this by simply overlaying a hot color
+        
+        // Calculate heat ratio (0.0 to 1.0)
+        let heat = Math.min(this.temp / 8.0, 1);
+        
+        // Interpolate color
+        // Cold: hsl(hue, 70%, 50%)
+        // Hot: hsl(0, 100%, 90%)
+        
+        // Simple hack for heatmap: 
+        // if heat is low, stay blue/material color. If heat is high, go red/white.
+        // Hue logic: Map current hue towards 0 (red) or 60 (yellow) based on heat
+        
+        const displayHue = hue + (0 - hue) * heat; // Drift to red
+        const displayLight = 40 + (60 * heat);     // Drift to white
+        
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, PARTICLE_RADIUS, 0, Math.PI * 2);
+        ctx.fillStyle = `hsl(${displayHue}, ${80 + heat*20}%, ${displayLight}%)`;
+        ctx.fill();
+        
+        // Draw forces (optional, subtle glow for hot particles)
+        if (heat > 0.5) {
+            ctx.fillStyle = `rgba(255, 100, 50, ${heat * 0.3})`;
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, PARTICLE_RADIUS * 2, 0, Math.PI * 2);
+            ctx.fill();
+        }
+    }
+}
+
+/**
+ * PHYSICS ENGINE
+ */
+function solveInteractions() {
+    // Simple O(N^2) solver. For <1000 particles this is fine on modern devices.
+    // Ideally, use a spatial grid for optimization if N > 1000.
+    
+    for (let i = 0; i < particles.length; i++) {
+        for (let j = i + 1; j < particles.length; j++) {
+            const p1 = particles[i];
+            const p2 = particles[j];
+
+            const dx = p2.x - p1.x;
+            const dy = p2.y - p1.y;
+            const distSq = dx*dx + dy*dy;
+
+            // Optimization: ignore far particles
+            if (distSq > physicsParams.interactionRadius * physicsParams.interactionRadius) continue;
+
+            const dist = Math.sqrt(distSq);
+            if (dist === 0) continue; // Prevent divide by zero
+
+            // Force Calculation (Lennard-Jones-ish)
+            // We want a stable distance (SPACING).
+            // If dist < SPACING: Repel strongly
+            // If dist > SPACING: Attract weakly (Bonding)
+            
+            const normalX = dx / dist;
+            const normalY = dy / dist;
+
+            // Force magnitude
+            // Negative = Repulsion, Positive = Attraction
+            let force = 0;
+
+            if (dist < SPACING) {
+                // Strong Repulsion (Hooke's law pushing out)
+                force = -(SPACING - dist) * physicsParams.repulsion; 
+            } else {
+                // Attraction (Bonds)
+                force = (dist - SPACING) * physicsParams.attraction;
+            }
+
+            // Apply forces
+            // F = ma, assume mass = 1 for now
+            p1.vx += force * normalX;
+            p1.vy += force * normalY;
+            p2.vx -= force * normalX;
+            p2.vy -= force * normalY;
+        }
+    }
+}
+
+/**
+ * SETUP & LOOP
+ */
+function initLattice() {
+    particles = [];
+    const startX = (canvas.width - (COLS * SPACING)) / 2;
+    const startY = (canvas.height - (ROWS * SPACING * 0.866)) / 2;
+
+    for (let row = 0; row < ROWS; row++) {
+        for (let col = 0; col < COLS; col++) {
+            // Hexagonal Offset
+            const xOffset = (row % 2 === 0) ? 0 : SPACING / 2;
+            
+            const x = startX + (col * SPACING) + xOffset;
+            const y = startY + (row * (SPACING * 0.866)); // 0.866 is sin(60deg)
+
+            // Add random noise so they aren't perfectly frozen
+            particles.push(new Particle(x + Math.random(), y + Math.random()));
+        }
+    }
+}
+
+function animate() {
+    // Clear Canvas
+    ctx.fillStyle = 'rgba(17, 17, 17, 0.4)'; // Trail effect
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Physics Steps
+    solveInteractions();
+    particles.forEach(p => {
+        p.update();
+        p.draw();
+    });
+
+    requestAnimationFrame(animate);
+}
+
+/**
+ * EVENT LISTENERS
+ */
+function resize() {
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+    initLattice();
+}
+
+window.addEventListener('resize', resize);
+resize(); // Initial call
+
+// Mouse interaction
+window.addEventListener('mousedown', e => { mouse.isDown = true; mouse.x = e.clientX; mouse.y = e.clientY; });
+window.addEventListener('mousemove', e => { mouse.x = e.clientX; mouse.y = e.clientY; });
+window.addEventListener('mouseup',   e => { mouse.isDown = false; });
+
+// UI Controls
+const matSelect = document.getElementById('materialSelect');
+const tempSlider = document.getElementById('tempSlider');
+const bondSlider = document.getElementById('bondSlider');
+const gravSlider = document.getElementById('gravitySlider');
+const resetBtn = document.getElementById('resetBtn');
+
+function updatePhysics() {
+    const mat = materials[matSelect.value];
+    
+    // Base material props
+    physicsParams.friction = mat.friction;
+    
+    // Sliders modify the base material props
+    const tempMult = parseInt(tempSlider.value) / 10; // 0 to 10
+    physicsParams.jitter = tempMult * 0.1;
+    
+    const bondMult = parseInt(bondSlider.value) / 50; // 0 to 2
+    physicsParams.attraction = mat.attraction * bondMult;
+    
+    physicsParams.gravity = parseInt(gravSlider.value) / 100;
+
+    // UI text updates
+    document.getElementById('tempVal').innerText = tempSlider.value;
+}
+
+// Attach listeners
+matSelect.addEventListener('change', updatePhysics);
+tempSlider.addEventListener('input', updatePhysics);
+bondSlider.addEventListener('input', updatePhysics);
+gravSlider.addEventListener('input', updatePhysics);
+resetBtn.addEventListener('click', initLattice);
+
+// Start
+updatePhysics();
+animate();
+
+</script>
+</body>
+</html>

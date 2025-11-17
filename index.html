@@ -19,12 +19,12 @@
             position: absolute;
             top: 10px;
             left: 10px;
-            background: rgba(30, 30, 30, 0.9);
+            background: rgba(30, 30, 30, 0.5);
             padding: 15px;
             border-radius: 8px;
             border: 1px solid #444;
             width: 280px;
-            backdrop-filter: blur(5px);
+            backdrop-filter: blur(0px);
             box-shadow: 0 4px 15px rgba(0,0,0,0.5);
         }
         h2 { margin: 0 0 10px 0; font-size: 1.1rem; color: #eee; }
@@ -43,6 +43,31 @@
             font-weight: bold;
             margin-top: 5px;
         }
+        /* Minimize button (separate from other control buttons) */
+        .minimize-button {
+            width: auto;
+            padding: 6px 8px;
+            background: rgba(0,0,0,0.35);
+            color: #fff;
+            border-radius: 6px;
+            border: 1px solid rgba(255,255,255,0.06);
+            margin: 0 0 10px 0;
+            display: inline-block;
+            cursor: pointer;
+            font-weight: 700;
+        }
+        .minimize-button:hover { background: rgba(0,0,0,0.5); }
+
+        /* Collapsed controls: hide everything except the minimize button and shrink container */
+        #controls.collapsed {
+            width: auto !important;
+            padding: 6px !important;
+            border-radius: 6px !important;
+            overflow: visible;
+            backdrop-filter: none;
+        }
+        #controls.collapsed > *:not(.minimize-button) { display: none !important; }
+        #controls.collapsed .minimize-button { width: 36px; padding: 6px; }
         button:hover { background: #0056b3; }
         .legend {
             display: flex;
@@ -65,7 +90,11 @@
 <body>
 
     <div id="controls">
-        <h2>Molecular Dynamics</h2>
+        <button class="minimize-button">Toggle Menu</button>
+        <br><br>
+
+        <h2>Particles</h2>
+        <h5>Molecular Dynamics Explorer</h5>
         
         <div class="control-group">
             <label>Material Preset</label>
@@ -96,12 +125,20 @@
             <button id="resetBtn">Reset Lattice</button>
         </div>
 
+        <br>
+
         <div style="margin-top: 15px; font-size: 0.8rem; color: #ddd;">
             <strong>Instructions:</strong><br>
-            • <b>Click & Drag</b> to inject HEAT into the system.<br>
-            • Observe rows sliding (slip planes).<br>
+            • <b>Click & Drag</b> to inject heat into the system.<br>
             • High heat breaks the lattice.
+
+            <br><br>
+            <strong>To add:</strong><br>
+            • Increase Ambient Temp for Brownian motion.<br>
+            • Observe rows sliding (slip planes).<br>
         </div>
+
+        <br>
 
         <div class="legend"></div>
         <div class="legend-labels">
@@ -121,8 +158,8 @@ const ctx = canvas.getContext('2d');
 
 let particles = [];
 const PARTICLE_RADIUS = 6;
-const SPACING = 14; // Distance between centers in lattice
-const ROWS = 25;
+const SPACING = 5; // Distance between centers in lattice
+const ROWS = 50;
 const COLS = 30;
 
 // Physics State
@@ -130,9 +167,9 @@ let physicsParams = {
     gravity: 0.05,
     friction: 0.96,
     repulsion: 1.5,    // Push apart when too close
-    attraction: 0.02,  // Pull together (Van der Waals / Bonding)
+    attraction: 0.5,  // Pull together (Van der Waals / Bonding)
     interactionRadius: 35,
-    jitter: 0.05       // Ambient temperature noise
+    jitter: 0.0       // Ambient temperature noise
 };
 
 // Mouse State
@@ -387,6 +424,50 @@ tempSlider.addEventListener('input', updatePhysics);
 bondSlider.addEventListener('input', updatePhysics);
 gravSlider.addEventListener('input', updatePhysics);
 resetBtn.addEventListener('click', initLattice);
+
+// Minimize / Toggle controls menu
+(() => {
+    const controls = document.getElementById('controls');
+    const btn = controls.querySelector('.minimize-button');
+    if (!btn) return;
+
+    // Initialize state
+    btn.setAttribute('aria-controls', 'controls');
+    btn.setAttribute('aria-expanded', 'true');
+    // Compact icon when open/closed
+    const ICON_OPEN = '▾';
+    const ICON_CLOSED = '▸';
+    btn.textContent = ICON_OPEN;
+
+    function setCollapsed(collapsed) {
+        if (collapsed) {
+            controls.classList.add('collapsed');
+            btn.setAttribute('aria-expanded', 'false');
+            btn.textContent = ICON_CLOSED;
+        } else {
+            controls.classList.remove('collapsed');
+            btn.setAttribute('aria-expanded', 'true');
+            btn.textContent = ICON_OPEN;
+        }
+    }
+
+    btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const nowCollapsed = !controls.classList.contains('collapsed');
+        setCollapsed(nowCollapsed);
+    });
+
+    // Prevent canvas from receiving drag when interacting with the button
+    btn.addEventListener('mousedown', e => e.stopPropagation());
+    btn.addEventListener('touchstart', e => e.stopPropagation());
+
+    // Optional: allow pressing Escape to open the menu
+    window.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && controls.classList.contains('collapsed')) {
+            setCollapsed(false);
+        }
+    });
+})();
 
 // Start
 updatePhysics();

@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Molecular Lattice & Thermal Simulation</title>
+    <title>Simulation</title>
     <style>
         body {
             margin: 0;
@@ -94,7 +94,7 @@
         <br><br>
 
         <h2>Particles</h2>
-        <h5>Molecular Dynamics Explorer</h5>
+        <h5>(Work in progress.)</h5>
         
         <div class="control-group">
             <label>Material Preset</label>
@@ -102,14 +102,17 @@
                 <option value="iron">Iron (Strong Lattice)</option>
                 <option value="gold">Gold (Malleable/Heavy)</option>
                 <option value="fluid">Water/Fluid (Loose)</option>
-                <option value="gas">Volatile Gas (Repulsive)</option>
+                <option value="oxygen">Oxygen (Gas)</option>
+                <option value="nitrogen">Nitrogen (Gas)</option>
+                <option value="argon">Argon (Noble Gas)</option>
             </select>
         </div>
 
-        <div class="control-group">
-            <label>Ambient Temp (Energy) <span id="tempVal">0</span></label>
-            <input type="range" id="tempSlider" min="0" max="100" value="0">
-        </div>
+            <div class="control-group">
+                <label>Ambient Temp (°C) <span id="tempVal">0</span></label>
+                <input type="range" id="tempSlider" min="-273" max="2000" value="0">
+                <input type="number" id="tempInput" value="20" style="width:70px; margin-top:6px; margin-left:6px; background:#222; color:#fff; border:1px solid #444; padding:4px; border-radius:4px;">
+            </div>
 
         <div class="control-group">
             <label>Inter-Molecular Force <span id="bondVal">High</span></label>
@@ -117,12 +120,12 @@
         </div>
 
         <div class="control-group">
-            <label>Gravity</label>
+            <label>Gravity (Buggy)</label>
             <input type="range" id="gravitySlider" min="0" max="20" value="0">
         </div>
 
         <div class="control-group">
-            <button id="resetBtn">Reset Lattice</button>
+            <button id="resetBtn">Reset</button>
         </div>
 
         <br>
@@ -130,12 +133,6 @@
         <div style="margin-top: 15px; font-size: 0.8rem; color: #ddd;">
             <strong>Instructions:</strong><br>
             • <b>Click & Drag</b> to inject heat into the system.<br>
-            • High heat breaks the lattice.
-
-            <br><br>
-            <strong>To add:</strong><br>
-            • Increase Ambient Temp for Brownian motion.<br>
-            • Observe rows sliding (slip planes).<br>
         </div>
 
         <br>
@@ -157,20 +154,36 @@ const canvas = document.getElementById('simCanvas');
 const ctx = canvas.getContext('2d');
 
 let particles = [];
-const PARTICLE_RADIUS = 6;
-const SPACING = 5; // Distance between centers in lattice
+const PARTICLE_RADIUS = 5;
+const BASE_SPACING = 5; // Base distance between centers in lattice; scaled per-material
 const ROWS = 50;
 const COLS = 30;
+// Temperature range for the slider
+const TEMP_MIN = -273;
+const TEMP_MAX = 2000;
 
 // Physics State
 let physicsParams = {
-    gravity: 0.05,
+    gravity: 0.00,
     friction: 0.96,
-    repulsion: 1.5,    // Push apart when too close
-    attraction: 0.5,  // Pull together (Van der Waals / Bonding)
-    interactionRadius: 35,
-    jitter: 0.0       // Ambient temperature noise
+    repulsion: 0.1,    // Push apart when too close
+    attraction: 0.5,  // Base attraction hint (per-material overrides used)
+    interactionRadius: 40, // How far particles influence each other
+    jitter: 0.4       // Ambient temperature noise
 };
+
+// Dynamic lattice spacing (updated per-material)
+physicsParams.latticeSpacing = BASE_SPACING;
+// Inter-particle attraction used by solver (temperature-aware)
+physicsParams.interParticleAttraction = 0.02;
+// Restoring spring toward resting lattice position
+physicsParams.restoring = 0.0005;
+// Bond break/heal controls
+physicsParams.bondBreakThreshold = 0.6; // relative force threshold for breaking bonds
+physicsParams.bondHealFrames = 400; // frames until a broken bond heals
+
+// Track broken bonds between neighbor pairs (key = "i-j") -> remaining frames to heal
+const brokenBonds = new Map();
 
 // Mouse State
 const mouse = { x: -1000, y: -1000, isDown: false };
@@ -179,10 +192,78 @@ const mouse = { x: -1000, y: -1000, isDown: false };
  * MATERIAL PRESETS
  */
 const materials = {
-    iron: { attraction: 0.03, repulsion: 2.0, friction: 0.95, gravity: 0.05, colorBase: 210 }, // Blueish
-    gold: { attraction: 0.02, repulsion: 1.5, friction: 0.98, gravity: 0.2, colorBase: 50 },   // Yellowish
-    fluid: { attraction: 0.008, repulsion: 1.0, friction: 0.99, gravity: 0.02, colorBase: 180 }, // Cyan
-    gas:   { attraction: -0.005, repulsion: 3.0, friction: 1.0, gravity: -0.01, colorBase: 280 } // Purple
+    iron: {
+        attraction: 0.05,
+        repulsion: 0.0,
+        friction: 0.99,
+        gravity: 0.0,
+        colorBase: 210,
+        crashTemp: 1538,       // °C (melting point ~1538°C)
+        latticeSpacing: 1.5,
+        bondBase: 0.45,
+        breakThreshold: 0.1,
+        density: 7.87
+    }, // Iron
+    gold: {
+        attraction: 0.03,
+        repulsion: 1.5,
+        friction: 0.98,
+        gravity: 0.2,
+        colorBase: 50,
+        crashTemp: 1064,
+        latticeSpacing: 1.2,
+        bondBase: 0.3,
+        breakThreshold: 0.85,
+        density: 19.3
+    }, // Gold
+    fluid: {
+        attraction: 0.008,
+        repulsion: 1.0,
+        friction: 0.99,
+        gravity: 0.00,
+        colorBase: 180,
+        crashTemp: 0, // water freezes at 0°C
+        latticeSpacing: 1.6,
+        bondBase: 0.00,
+        breakThreshold: 0.5,
+        density: 1.0
+    }, // Water-like fluid
+    oxygen: {
+        attraction: -0.002,
+        repulsion: 2.5,
+        friction: 1.0,
+        gravity: -0.01,
+        colorBase: 260,
+        crashTemp: -183,
+        latticeSpacing: 2.8,
+        bondBase: 0.01,
+        breakThreshold: 0.4,
+        density: 0.001429
+    },
+    nitrogen: {
+        attraction: -0.005,
+        repulsion: 5.6,
+        friction: 1.0,
+        gravity: -0.01,
+        colorBase: 240,
+        crashTemp: -210,
+        latticeSpacing: 5.0,
+        bondBase: 0.009,
+        breakThreshold: 0.4,
+        density: 0.001251
+    },
+    argon: {
+        attraction: -0.0015,
+        repulsion: 2.4,
+        friction: 1.0,
+        gravity: -0.01,
+        colorBase: 300,
+        crashTemp: -189,
+        latticeSpacing: 4.3,
+        bondBase: 0.008,
+        breakThreshold: 0.35,
+        density: 0.00178
+    }
 };
 
 /**
@@ -190,8 +271,12 @@ const materials = {
  */
 class Particle {
     constructor(x, y) {
-        this.x = x;
-        this.y = y;
+        // Resting lattice position (target when cooled)
+        this.restX = x;
+        this.restY = y;
+        // Start near the resting position with a tiny random offset
+        this.x = x + (Math.random() - 0.5) * 1.5;
+        this.y = y + (Math.random() - 0.5) * 1.5;
         this.vx = 0;
         this.vy = 0;
         // Store previous positions for verlet-ish stabilization or visual trails (optional)
@@ -227,6 +312,16 @@ class Particle {
         // 4. Update Position
         this.x += this.vx;
         this.y += this.vy;
+
+        // 4.5 Restorative bonding force to pull particles toward their lattice positions
+        // This creates the recrystallization behavior as temperature decreases.
+        if (physicsParams.restoring && physicsParams.restoring > 0) {
+            const dxr = this.restX - this.x;
+            const dyr = this.restY - this.y;
+            // Apply a spring-like force towards resting lattice position
+            this.vx += dxr * physicsParams.restoring;
+            this.vy += dyr * physicsParams.restoring;
+        }
 
         // 5. Apply Friction/Damping
         this.vx *= physicsParams.friction;
@@ -293,6 +388,14 @@ function solveInteractions() {
     // Simple O(N^2) solver. For <1000 particles this is fine on modern devices.
     // Ideally, use a spatial grid for optimization if N > 1000.
     
+    // Decay broken bonds (frame-based healing)
+    if (brokenBonds.size > 0) {
+        for (const [key, frames] of Array.from(brokenBonds.entries())) {
+            if (frames <= 1) brokenBonds.delete(key);
+            else brokenBonds.set(key, frames - 1);
+        }
+    }
+
     for (let i = 0; i < particles.length; i++) {
         for (let j = i + 1; j < particles.length; j++) {
             const p1 = particles[i];
@@ -316,24 +419,38 @@ function solveInteractions() {
             const normalX = dx / dist;
             const normalY = dy / dist;
 
-            // Force magnitude
-            // Negative = Repulsion, Positive = Attraction
-            let force = 0;
+            const lattice = physicsParams.latticeSpacing;
 
-            if (dist < SPACING) {
-                // Strong Repulsion (Hooke's law pushing out)
-                force = -(SPACING - dist) * physicsParams.repulsion; 
+            // Check if this pair is a bonded neighbor (use neighborSet for faster checks)
+            const isNeighbor = p1.neighborSet && p1.neighborSet.has(j);
+            const key = `${Math.min(i,j)}-${Math.max(i,j)}`;
+
+            // If neighbor bond exists and is not currently broken, apply bond forces
+            if (isNeighbor && !brokenBonds.has(key)) {
+                // Bond force: linear spring toward lattice spacing
+                const bondForce = (dist - lattice) * physicsParams.interParticleAttraction;
+
+                // If bondForce grows too large (strong shear), break the bond temporarily
+                if (Math.abs(bondForce) > physicsParams.bondBreakThreshold) {
+                    brokenBonds.set(key, physicsParams.bondHealFrames);
+                    // skip applying bond this frame - bond broken
+                } else {
+                    p1.vx += bondForce * normalX;
+                    p1.vy += bondForce * normalY;
+                    p2.vx -= bondForce * normalX;
+                    p2.vy -= bondForce * normalY;
+                }
             } else {
-                // Attraction (Bonds)
-                force = (dist - SPACING) * physicsParams.attraction;
+                // Non-neighbor interactions: mainly short-range repulsion to avoid overlaps
+                if (dist < lattice * 0.85) {
+                    const rep = -(lattice * 0.85 - dist) * physicsParams.repulsion * 1.2;
+                    p1.vx += rep * normalX;
+                    p1.vy += rep * normalY;
+                    p2.vx -= rep * normalX;
+                    p2.vy -= rep * normalY;
+                }
+                // Optionally, weak long-range attraction for condensed phases (handled by restoring/global springs)
             }
-
-            // Apply forces
-            // F = ma, assume mass = 1 for now
-            p1.vx += force * normalX;
-            p1.vy += force * normalY;
-            p2.vx -= force * normalX;
-            p2.vy -= force * normalY;
         }
     }
 }
@@ -343,19 +460,55 @@ function solveInteractions() {
  */
 function initLattice() {
     particles = [];
-    const startX = (canvas.width - (COLS * SPACING)) / 2;
-    const startY = (canvas.height - (ROWS * SPACING * 0.866)) / 2;
+    const lattice = physicsParams.latticeSpacing;
+    const startX = (canvas.width - (COLS * lattice)) / 2;
+    const startY = (canvas.height - (ROWS * lattice * 0.866)) / 2;
 
     for (let row = 0; row < ROWS; row++) {
         for (let col = 0; col < COLS; col++) {
             // Hexagonal Offset
-            const xOffset = (row % 2 === 0) ? 0 : SPACING / 2;
-            
-            const x = startX + (col * SPACING) + xOffset;
-            const y = startY + (row * (SPACING * 0.866)); // 0.866 is sin(60deg)
+            const xOffset = (row % 2 === 0) ? 0 : lattice / 2;
+
+            const x = startX + (col * lattice) + xOffset;
+            const y = startY + (row * (lattice * 0.866)); // 0.866 is sin(60deg)
 
             // Add random noise so they aren't perfectly frozen
-            particles.push(new Particle(x + Math.random(), y + Math.random()));
+            // Pass the resting lattice coordinates into the Particle so it can be pulled back when cooled.
+            const p = new Particle(x, y);
+            p.row = row;
+            p.col = col;
+            particles.push(p);
+        }
+    }
+
+    // Build neighbor sets for hex lattice (for bond tracking)
+    for (let i = 0; i < particles.length; i++) {
+        const p = particles[i];
+        const r = p.row;
+        const c = p.col;
+        p.neighborSet = new Set();
+
+        // neighbor helper
+        const tryAdd = (rr, cc) => {
+            if (rr < 0 || rr >= ROWS || cc < 0 || cc >= COLS) return;
+            const idx = rr * COLS + cc;
+            p.neighborSet.add(idx);
+        };
+
+        // left / right
+        tryAdd(r, c-1);
+        tryAdd(r, c+1);
+
+        if (r % 2 === 0) {
+            tryAdd(r-1, c-1);
+            tryAdd(r-1, c);
+            tryAdd(r+1, c-1);
+            tryAdd(r+1, c);
+        } else {
+            tryAdd(r-1, c);
+            tryAdd(r-1, c+1);
+            tryAdd(r+1, c);
+            tryAdd(r+1, c+1);
         }
     }
 }
@@ -395,27 +548,69 @@ window.addEventListener('mouseup',   e => { mouse.isDown = false; });
 // UI Controls
 const matSelect = document.getElementById('materialSelect');
 const tempSlider = document.getElementById('tempSlider');
+const tempInput = document.getElementById('tempInput');
 const bondSlider = document.getElementById('bondSlider');
 const gravSlider = document.getElementById('gravitySlider');
 const resetBtn = document.getElementById('resetBtn');
 
 function updatePhysics() {
     const mat = materials[matSelect.value];
+    // If material changed, rebuild lattice to match its latticeSpacing
+    if (updatePhysics._lastMaterial !== matSelect.value) {
+        updatePhysics._lastMaterial = matSelect.value;
+        physicsParams.latticeSpacing = BASE_SPACING * (mat.latticeSpacing || 1);
+        // Re-init lattice to apply new spacing
+        initLattice();
+    } else {
+        physicsParams.latticeSpacing = BASE_SPACING * (mat.latticeSpacing || 1);
+    }
     
     // Base material props
     physicsParams.friction = mat.friction;
     
     // Sliders modify the base material props
-    const tempMult = parseInt(tempSlider.value) / 10; // 0 to 10
-    physicsParams.jitter = tempMult * 0.1;
-    
+    const tempVal = parseInt(tempSlider.value);
+    // Normalize temperature to 0..1 across defined slider range
+    const tempScale = Math.max(0, Math.min(1, (tempVal - TEMP_MIN) / (TEMP_MAX - TEMP_MIN)));
+    const cooled = 1 - tempScale; // 1 when cold
+
+    // Jitter (Brownian motion) scales with temperature; clamp to non-negative small values
     const bondMult = parseInt(bondSlider.value) / 50; // 0 to 2
-    physicsParams.attraction = mat.attraction * bondMult;
-    
-    physicsParams.gravity = parseInt(gravSlider.value) / 100;
+    const jitterMax = 1.5; // tuneable max jitter multiplier
+    physicsParams.jitter = Math.max(0, tempScale * jitterMax);
+
+    // Compute crash factor: how far below crashTemp we are (0..1)
+    const crashDelta = mat.crashTemp - tempVal; // positive if below crashTemp
+    const crashFactor = Math.max(0, Math.min(1, crashDelta / 400)); // scale into 0..1 over ~400°C range
+
+    // Inter-particle attraction: use material bondBase as base and scale by bond slider, cooling and crash
+    physicsParams.interParticleAttraction = (Math.abs(mat.bondBase || mat.attraction || 0)) * (1 + bondMult * 1.5) * (1 + cooled * 1.8 + crashFactor * 3.5);
+
+    // Restoring spring force toward lattice positions (positive spring constant)
+    const baseRest = Math.max(0.00025, Math.abs(mat.bondBase || mat.attraction) * 0.06);
+    physicsParams.restoring = baseRest * (1 + bondMult * 3.0) * (1 + cooled * 6.0 + crashFactor * 9.0);
+
+    // Adjust interaction radius to cover neighbors (useful when latticeSpacing is large)
+    physicsParams.interactionRadius = physicsParams.latticeSpacing * 3.2;
+
+    // Bond break threshold can be adjusted per-material
+    physicsParams.bondBreakThreshold = mat.breakThreshold || physicsParams.bondBreakThreshold;
+
+    // Gravity scales with the gravity slider but is multiplied by the material density
+    const gravVal = parseInt(gravSlider.value) / 100;
+    physicsParams.gravity = gravVal * (mat.density || 1);
 
     // UI text updates
-    document.getElementById('tempVal').innerText = tempSlider.value;
+    document.getElementById('tempVal').innerText = tempVal;
+    // Sync numeric input with slider (validated)
+    if (tempInput) {
+        const clamped = Math.max(TEMP_MIN, Math.min(TEMP_MAX, tempVal));
+        if (parseInt(tempInput.value) !== clamped) tempInput.value = clamped;
+    }
+
+    // Show a coarse bond level (Low/Med/High)
+    const bondLabel = bondMult < 0.5 ? 'Low' : (bondMult < 1.25 ? 'Medium' : 'High');
+    document.getElementById('bondVal').innerText = bondLabel;
 }
 
 // Attach listeners
@@ -424,6 +619,17 @@ tempSlider.addEventListener('input', updatePhysics);
 bondSlider.addEventListener('input', updatePhysics);
 gravSlider.addEventListener('input', updatePhysics);
 resetBtn.addEventListener('click', initLattice);
+
+// tempInput two-way binding & validation (if present)
+if (tempInput) {
+    tempInput.addEventListener('input', (e) => {
+        let v = parseInt(e.target.value || 0);
+        if (isNaN(v)) v = 0;
+        v = Math.max(TEMP_MIN, Math.min(TEMP_MAX, v));
+        if (parseInt(tempSlider.value) !== v) tempSlider.value = v;
+        updatePhysics();
+    });
+}
 
 // Minimize / Toggle controls menu
 (() => {

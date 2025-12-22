@@ -15,6 +15,26 @@
         canvas {
             display: block;
         }
+        #simCanvas3d {
+            display: none;
+        }
+        body.is-mobile #controls {
+            width: 230px;
+            padding: 10px;
+        }
+        body.is-mobile .desktop-only {
+            display: none;
+        }
+        body.is-mobile .legend,
+        body.is-mobile .legend-labels {
+            display: none;
+        }
+        .fluid-only {
+            display: none;
+        }
+        body.mode-fluid .fluid-only {
+            display: block;
+        }
         #controls {
             position: absolute;
             top: 10px;
@@ -32,6 +52,7 @@
         label { display: flex; justify-content: space-between; font-size: 0.85rem; color: #aaa; }
         input[type=range] { width: 100%; margin-top: 5px; cursor: pointer; }
         select { width: 100%; padding: 5px; background: #333; color: white; border: 1px solid #555; border-radius: 4px; }
+        input[type=checkbox] { transform: scale(1.05); margin-top: 6px; }
         button {
             width: 100%;
             padding: 8px;
@@ -97,7 +118,7 @@
         <h5>(Work in progress.)</h5>
         
         <div class="control-group">
-            <label>Material Preset</label>
+            <label for="materialSelect">Material Preset</label>
             <select id="materialSelect">
                 <option value="iron">Iron (Strong Lattice)</option>
                 <option value="gold">Gold (Malleable/Heavy)</option>
@@ -108,19 +129,55 @@
             </select>
         </div>
 
+        <div class="control-group desktop-only">
+            <label for="rendererSelect">Renderer</label>
+            <select id="rendererSelect">
+                <option value="2d">2D</option>
+                <option value="3d">3D (Beta)</option>
+            </select>
+        </div>        <div class="control-group">
+            <label for="modeSelect">Simulation Mode</label>
+            <select id="modeSelect">
+                <option value="lattice">Lattice</option>
+                <option value="fluid">Fluid (SPH)</option>
+            </select>
+        </div>
+
+        <div class="control-group fluid-only">
+            <label for="viscSlider">Viscosity <span id="viscVal">0.08</span></label>
+            <input type="range" id="viscSlider" min="0" max="100" value="8">
+        </div>
+
+        <div class="control-group fluid-only">
+            <label for="compSlider">Compressibility <span id="compVal">30</span></label>
+            <input type="range" id="compSlider" min="0" max="100" value="30">
+        </div>
+
+        <div class="control-group fluid-only">
+            <label for="surfSlider">Surface Tension <span id="surfVal">0.02</span></label>
+            <input type="range" id="surfSlider" min="0" max="100" value="2">
+        </div>
+
+        <div class="control-group fluid-only">
+            <label for="xsphSlider">Velocity Smoothing <span id="xsphVal">0.12</span></label>
+            <input type="range" id="xsphSlider" min="0" max="100" value="12">
+        </div>
+
+
+
             <div class="control-group">
-                <label>Ambient Temp (°C) <span id="tempVal">0</span></label>
-                <input type="range" id="tempSlider" min="-273" max="2000" value="0">
+                <label for="tempSlider">Ambient Temp (°C) <span id="tempVal">20</span></label>
+                <input type="range" id="tempSlider" min="-273" max="2000" value="20">
                 <input type="number" id="tempInput" value="20" style="width:70px; margin-top:6px; margin-left:6px; background:#222; color:#fff; border:1px solid #444; padding:4px; border-radius:4px;">
             </div>
 
         <div class="control-group">
-            <label>Inter-Molecular Force <span id="bondVal">High</span></label>
+            <label for="bondSlider">Inter-Molecular Force <span id="bondVal">High</span></label>
             <input type="range" id="bondSlider" min="0" max="100" value="0">
         </div>
 
         <div class="control-group">
-            <label>Gravity (Buggy)</label>
+            <label for="gravitySlider">Gravity</label>
             <input type="range" id="gravitySlider" min="0" max="20" value="0">
         </div>
 
@@ -128,11 +185,26 @@
             <button id="resetBtn">Reset</button>
         </div>
 
+        <div class="control-group">
+            <label for="countSlider">Particle Count <span id="countVal">1500</span></label>
+            <input type="range" id="countSlider" min="200" max="4000" value="1500" step="50">
+        </div>
+
+        <div class="control-group">
+            <label for="tracerToggle">Fluid Tracers</label>
+            <input type="checkbox" id="tracerToggle" checked>
+        </div>
+
+        <div class="control-group desktop-only">
+            <label for="boundsToggle">Show 3D Bounds</label>
+            <input type="checkbox" id="boundsToggle" checked>
+        </div>
+
         <br>
 
         <div style="margin-top: 15px; font-size: 0.8rem; color: #ddd;">
             <strong>Instructions:</strong><br>
-            • <b>Click & Drag</b> to inject heat into the system.<br>
+            <span id="instructionsText">• <b>Click & Drag</b> to inject heat into the system.</span><br>
         </div>
 
         <br>
@@ -145,22 +217,49 @@
     </div>
 
     <canvas id="simCanvas"></canvas>
+    <canvas id="simCanvas3d"></canvas>
 
 <script>
 /**
  * SIMULATION CONFIGURATION
  */
 const canvas = document.getElementById('simCanvas');
+const canvas3d = document.getElementById('simCanvas3d');
 const ctx = canvas.getContext('2d');
 
+const isMobile = /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || window.matchMedia('(pointer: coarse)').matches;
+document.body.classList.toggle('is-mobile', isMobile);
+
+let simWidth = 0;
+let simHeight = 0;
+let dpr = 1;
+
 let particles = [];
+const fluidParams = {
+    smoothingRadius: 24,
+    mass: 1.0,
+    restDensity: 8.0,
+    gasConstant: 30.0,
+    viscosity: 0.08,
+    xsph: 0.12,
+    surfaceTension: 0.02,
+    surfaceThreshold: 0.9,
+    timeStep: 1 / 60
+};
+
 const PARTICLE_RADIUS = 5;
 const BASE_SPACING = 5; // Base distance between centers in lattice; scaled per-material
 const ROWS = 50;
 const COLS = 30;
+let gridRows = ROWS;
+let gridCols = COLS;
+let gridLayers = 1;
+const TRAIL_LENGTH = 8;
 // Temperature range for the slider
 const TEMP_MIN = -273;
 const TEMP_MAX = 2000;
+const MAX_SPEED = 12;
+const SIM_DEPTH = 720;
 
 // Physics State
 let physicsParams = {
@@ -187,6 +286,51 @@ const brokenBonds = new Map();
 
 // Mouse State
 const mouse = { x: -1000, y: -1000, isDown: false };
+let simMode = 'lattice';
+let countSlider = null;
+let countVal = null;
+let boundsToggle = null;
+let latticeOffsetY = 0;
+let latticeVy = 0;
+let latticeMinRestY = 0;
+let latticeMaxRestY = 0;
+
+let rendererMode = '2d';
+let renderer3d = null;
+let scene = null;
+let camera = null;
+let orbitYaw = 0.6;
+let orbitPitch = 0.2;
+let orbitDistance = 380;
+let cameraDrag = false;
+let lastPointerX = 0;
+let lastPointerY = 0;
+let lastPinchDistance = null;
+const activePointers = new Map();
+let panDrag = false;
+let panX = 0;
+let panY = 0;
+let lastPanX = 0;
+let lastPanY = 0;
+let points = null;
+let geometry = null;
+let positions = null;
+let colors = null;
+let boundsMesh = null;
+let boundsGeometry = null;
+let pointsMaterial = null;
+let volumeMesh = null;
+let volumeGeometry = null;
+let volumeMaterial = null;
+let volumeFrame = 0;
+let cameraFar = 0;
+let tracerMesh = null;
+let tracerGeometry = null;
+let tracerMaterial = null;
+let threeLoad = null;
+let heatPoint = { x: 0, y: 0, z: 0, valid: false };
+let raycaster = null;
+let heatPlane = null;
 
 /**
  * MATERIAL PRESETS
@@ -274,77 +418,147 @@ class Particle {
         // Resting lattice position (target when cooled)
         this.restX = x;
         this.restY = y;
+        this.restZ = 0;
         // Start near the resting position with a tiny random offset
         this.x = x + (Math.random() - 0.5) * 1.5;
         this.y = y + (Math.random() - 0.5) * 1.5;
+        this.z = 0;
+        this.prevX = this.x;
+        this.prevY = this.y;
+        this.prevZ = this.z;
+        this.trail = new Float32Array(TRAIL_LENGTH * 3);
+        this.trailIndex = 0;
+        this.trailCount = 0;
         this.vx = 0;
         this.vy = 0;
+        this.vz = 0;
         // Store previous positions for verlet-ish stabilization or visual trails (optional)
         this.temp = 0; // Represents kinetic energy
+        this.density = 0;
+        this.pressure = 0;
     }
 
     update() {
-        // 1. Apply Forces from Controls
+        this.prevX = this.x;
+        this.prevY = this.y;
+        this.prevZ = this.z;
         this.vy += physicsParams.gravity;
-        
-        // 2. Apply Ambient Temperature (Random Brownian Motion)
-        this.vx += (Math.random() - 0.5) * physicsParams.jitter;
-        this.vy += (Math.random() - 0.5) * physicsParams.jitter;
+        this.applyHeatNoise();
 
-        // 3. Mouse Interaction (Heat Injection)
-        if (mouse.isDown) {
-            const dx = this.x - mouse.x;
-            const dy = this.y - mouse.y;
-            const dist = Math.sqrt(dx*dx + dy*dy);
-            
-            // Heat radius
-            if (dist < 100) {
-                const force = (100 - dist) / 100;
-                // Push away slightly
-                this.vx += (dx / dist) * force * 2;
-                this.vy += (dy / dist) * force * 2;
-                // Add chaotic energy (Heat)
-                this.vx += (Math.random() - 0.5) * 5; 
-                this.vy += (Math.random() - 0.5) * 5;
+        this.x += this.vx;
+        this.y += this.vy;
+        this.z += this.vz;
+
+        if (physicsParams.restoring && physicsParams.restoring > 0) {
+            const dxr = this.restX - this.x;
+            const targetY = this.restY + latticeOffsetY;
+            const dyr = targetY - this.y;
+            this.vx += dxr * physicsParams.restoring;
+            this.vy += dyr * physicsParams.restoring;
+            if (rendererMode === '3d') {
+                const dzr = this.restZ - this.z;
+                this.vz += dzr * physicsParams.restoring;
             }
         }
 
-        // 4. Update Position
-        this.x += this.vx;
-        this.y += this.vy;
+        this.applyDamping();
+        this.applyBounds();
+        this.updateTemp();
+        this.recordTrail();
+    }
 
-        // 4.5 Restorative bonding force to pull particles toward their lattice positions
-        // This creates the recrystallization behavior as temperature decreases.
-        if (physicsParams.restoring && physicsParams.restoring > 0) {
-            const dxr = this.restX - this.x;
-            const dyr = this.restY - this.y;
-            // Apply a spring-like force towards resting lattice position
-            this.vx += dxr * physicsParams.restoring;
-            this.vy += dyr * physicsParams.restoring;
+    applyHeatNoise() {
+        this.vx += (Math.random() - 0.5) * physicsParams.jitter;
+        this.vy += (Math.random() - 0.5) * physicsParams.jitter;
+        if (rendererMode === '3d') {
+            this.vz += (Math.random() - 0.5) * physicsParams.jitter * 0.6;
         }
 
-        // 5. Apply Friction/Damping
+        if (mouse.isDown) {
+            if (rendererMode === '3d' && heatPoint.valid) {
+                const px = this.x - simWidth / 2;
+                const py = -(this.y - simHeight / 2);
+                const pz = this.z;
+                const dx = px - heatPoint.x;
+                const dy = py - heatPoint.y;
+                const dz = pz - heatPoint.z;
+                const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
+                const radius = getHeatRadius();
+                if (dist < radius) {
+                    const safeDist = Math.max(1, dist);
+                    const force = (radius - dist) / radius;
+                    this.vx += (dx / safeDist) * force * 2;
+                    this.vy += -(dy / safeDist) * force * 2;
+                    this.vz += (dz / safeDist) * force * 2;
+                    this.vx += (Math.random() - 0.5) * 5;
+                    this.vy += (Math.random() - 0.5) * 5;
+                    this.vz += (Math.random() - 0.5) * 3;
+                }
+            } else {
+                const dx = this.x - mouse.x;
+                const dy = this.y - mouse.y;
+                const dist = Math.sqrt(dx*dx + dy*dy);
+                const radius = getHeatRadius();
+                if (dist < radius) {
+                    const safeDist = Math.max(1, dist);
+                    const force = (radius - dist) / radius;
+                    this.vx += (dx / safeDist) * force * 2;
+                    this.vy += (dy / safeDist) * force * 2;
+                    this.vx += (Math.random() - 0.5) * 5;
+                    this.vy += (Math.random() - 0.5) * 5;
+                }
+            }
+        }
+    }
+
+    applyDamping() {
         this.vx *= physicsParams.friction;
         this.vy *= physicsParams.friction;
+        this.vz *= physicsParams.friction;
 
-        // 6. Boundary Constraints (Walls)
+        const maxSpeed = MAX_SPEED;
+        const speedSq = this.vx * this.vx + this.vy * this.vy + this.vz * this.vz;
+        if (speedSq > maxSpeed * maxSpeed) {
+            const scale = maxSpeed / Math.sqrt(speedSq);
+            this.vx *= scale;
+            this.vy *= scale;
+            this.vz *= scale;
+        }
+    }
+
+    applyBounds() {
         const dampening = 0.7;
-        if (this.x < PARTICLE_RADIUS) { this.x = PARTICLE_RADIUS; this.vx *= -dampening; }
-        if (this.x > canvas.width - PARTICLE_RADIUS) { this.x = canvas.width - PARTICLE_RADIUS; this.vx *= -dampening; }
-        if (this.y < PARTICLE_RADIUS) { this.y = PARTICLE_RADIUS; this.vy *= -dampening; }
-        if (this.y > canvas.height - PARTICLE_RADIUS) { this.y = canvas.height - PARTICLE_RADIUS; this.vy *= -dampening; }
+        const halfDepth = SIM_DEPTH / 2;
+        const nudge = 0.15;
+        if (this.x < PARTICLE_RADIUS) { this.x = PARTICLE_RADIUS; this.vx *= -dampening; this.vx += nudge; }
+        if (this.x > simWidth - PARTICLE_RADIUS) { this.x = simWidth - PARTICLE_RADIUS; this.vx *= -dampening; this.vx -= nudge; }
+        if (this.y < PARTICLE_RADIUS) { this.y = PARTICLE_RADIUS; this.vy *= -dampening; this.vy += nudge; }
+        if (this.y > simHeight - PARTICLE_RADIUS) { this.y = simHeight - PARTICLE_RADIUS; this.vy *= -dampening; this.vy -= nudge; }
+        if (rendererMode === '3d') {
+            if (this.z < -halfDepth) { this.z = -halfDepth; this.vz *= -dampening; this.vz += nudge; }
+            if (this.z > halfDepth) { this.z = halfDepth; this.vz *= -dampening; this.vz -= nudge; }
+        }
+    }
 
-        // Calculate "Temperature" for visualization based on speed
-        const speed = Math.sqrt(this.vx*this.vx + this.vy*this.vy);
-        // Smooth the temp reading
-        this.temp = this.temp * 0.9 + speed * 0.1; 
+    updateTemp() {
+        const speed = Math.sqrt(this.vx*this.vx + this.vy*this.vy + this.vz*this.vz);
+        this.temp = this.temp * 0.9 + speed * 0.1;
+    }
+
+    recordTrail() {
+        const idx = this.trailIndex * 3;
+        this.trail[idx] = this.x;
+        this.trail[idx + 1] = this.y;
+        this.trail[idx + 2] = this.z;
+        this.trailIndex = (this.trailIndex + 1) % TRAIL_LENGTH;
+        this.trailCount = Math.min(TRAIL_LENGTH, this.trailCount + 1);
     }
 
     draw() {
         // Color Mapping: Low Temp = Material Color, High Temp = Red/White
         // We shift hue towards red (0) and lightness towards 100% as temp rises
         
-        let hue = materials[document.getElementById('materialSelect').value].colorBase;
+        let hue = materials[currentMaterialKey].colorBase;
         let sat = 70;
         let light = 50;
 
@@ -370,7 +584,23 @@ class Particle {
         ctx.arc(this.x, this.y, PARTICLE_RADIUS, 0, Math.PI * 2);
         ctx.fillStyle = `hsl(${displayHue}, ${80 + heat*20}%, ${displayLight}%)`;
         ctx.fill();
-        
+
+        if (tracerToggle && tracerToggle.checked && simMode === 'fluid') {
+            ctx.strokeStyle = `rgba(255, 140, 90, ${0.2 + heat * 0.5})`;
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            const count = this.trailCount;
+            for (let i = 0; i < count; i++) {
+                const t = (this.trailIndex + i) % TRAIL_LENGTH;
+                const idx = t * 3;
+                const tx = this.trail[idx];
+                const ty = this.trail[idx + 1];
+                if (i === 0) ctx.moveTo(tx, ty);
+                else ctx.lineTo(tx, ty);
+            }
+            ctx.stroke();
+        }
+
         // Draw forces (optional, subtle glow for hot particles)
         if (heat > 0.5) {
             ctx.fillStyle = `rgba(255, 100, 50, ${heat * 0.3})`;
@@ -381,12 +611,375 @@ class Particle {
     }
 }
 
+
+function draw2DBackground() {
+    const trailAlpha = isMobile ? 0.25 : 0.4;
+    ctx.fillStyle = `rgba(17, 17, 17, ${trailAlpha})`;
+    ctx.fillRect(0, 0, simWidth, simHeight);
+}
+
+function hslToRgb(h, s, l) {
+    const sat = s / 100;
+    const light = l / 100;
+    const c = (1 - Math.abs(2 * light - 1)) * sat;
+    const hh = (h % 360) / 60;
+    const x = c * (1 - Math.abs(hh % 2 - 1));
+    let r = 0, g = 0, b = 0;
+    if (hh >= 0 && hh < 1) [r, g, b] = [c, x, 0];
+    else if (hh >= 1 && hh < 2) [r, g, b] = [x, c, 0];
+    else if (hh >= 2 && hh < 3) [r, g, b] = [0, c, x];
+    else if (hh >= 3 && hh < 4) [r, g, b] = [0, x, c];
+    else if (hh >= 4 && hh < 5) [r, g, b] = [x, 0, c];
+    else [r, g, b] = [c, 0, x];
+    const m = light - c / 2;
+    return {
+        r: Math.round((r + m) * 255),
+        g: Math.round((g + m) * 255),
+        b: Math.round((b + m) * 255)
+    };
+}
+
+function updateHeatPointFromPointer(x, y) {
+    if (rendererMode !== '3d' || !camera || !renderer3d || !window.THREE) {
+        heatPoint.valid = false;
+        return;
+    }
+    if (!raycaster) raycaster = new window.THREE.Raycaster();
+    if (!heatPlane) heatPlane = new window.THREE.Plane(new window.THREE.Vector3(0, 0, 1), 0);
+
+    const rect = canvas3d.getBoundingClientRect();
+    const nx = ((x - rect.left) / rect.width) * 2 - 1;
+    const ny = -((y - rect.top) / rect.height) * 2 + 1;
+
+    raycaster.setFromCamera({ x: nx, y: ny }, camera);
+    const hit = new window.THREE.Vector3();
+    const intersect = raycaster.ray.intersectPlane(heatPlane, hit);
+    if (intersect) {
+        heatPoint.x = hit.x;
+        heatPoint.y = hit.y;
+        heatPoint.z = hit.z;
+        heatPoint.valid = true;
+    } else {
+        heatPoint.valid = false;
+    }
+}
+
+function updateInstructions() {
+    if (!instructionsText) return;
+    if (rendererMode === '3d') {
+        instructionsText.textContent = 'Drag to orbit. Scroll to zoom. Hold Shift and drag to inject heat.';
+        return;
+    }
+    instructionsText.textContent = isMobile
+        ? 'Tap & Drag to inject heat into the system.'
+        : 'Click & Drag to inject heat into the system.';
+}
+
+function getHeatRadius() {
+    if (rendererMode !== '3d') return 100;
+    return 120 * Math.max(1, orbitDistance / 320);
+}
+
+function updateBoundsMesh() {
+    if (!window.THREE || !scene) return;
+    if (!boundsGeometry) {
+        boundsGeometry = new window.THREE.EdgesGeometry(
+            new window.THREE.BoxGeometry(simWidth, simHeight, SIM_DEPTH)
+        );
+    } else {
+        boundsGeometry.dispose();
+        boundsGeometry = new window.THREE.EdgesGeometry(
+            new window.THREE.BoxGeometry(simWidth, simHeight, SIM_DEPTH)
+        );
+    }
+    if (!boundsMesh) {
+        const material = new window.THREE.LineBasicMaterial({
+            color: 0xffffff,
+            transparent: true,
+            opacity: 0.15
+        });
+        boundsMesh = new window.THREE.LineSegments(boundsGeometry, material);
+        scene.add(boundsMesh);
+    } else {
+        boundsMesh.geometry = boundsGeometry;
+    }
+    if (boundsMesh) boundsMesh.visible = !!(boundsToggle && boundsToggle.checked);
+}
+
+function updateVolumeMesh() {
+    if (!window.THREE || !scene) return;
+    if (volumeFrame++ % 6 !== 0) return;
+    const slices = 16;
+    const grid = 16;
+    if (!volumeGeometry) {
+        volumeGeometry = new window.THREE.BufferGeometry();
+    }
+    const positionsArr = [];
+    const colorsArr = [];
+    const mat = materials[currentMaterialKey];
+    const isGas = mat.density < 0.01;
+    const farZoom = orbitDistance > 400;
+    if (!isGas || !farZoom) {
+        if (volumeMesh) volumeMesh.visible = false;
+        return;
+    }
+
+    const cellX = simWidth / grid;
+    const cellY = simHeight / grid;
+    const cellZ = SIM_DEPTH / slices;
+    const centerX = simWidth / 2;
+    const centerY = simHeight / 2;
+    const centerZ = 0;
+    const alphaScale = Math.min(0.95, (orbitDistance - 350) / 900);
+
+    for (let iz = 0; iz < slices; iz++) {
+        const z = -SIM_DEPTH / 2 + (iz + 0.5) * cellZ;
+        for (let iy = 0; iy < grid; iy++) {
+            const y = -centerY + (iy + 0.5) * cellY;
+            for (let ix = 0; ix < grid; ix++) {
+                const x = -centerX + (ix + 0.5) * cellX;
+                let count = 0;
+                for (let i = 0; i < particles.length; i++) {
+                    const p = particles[i];
+                    const px = p.x - centerX;
+                    const py = -(p.y - centerY);
+                    const pz = p.z;
+                    if (Math.abs(px - x) < cellX * 0.5 &&
+                        Math.abs(py - y) < cellY * 0.5 &&
+                        Math.abs(pz - z) < cellZ * 0.5) {
+                        count++;
+                    }
+                }
+                if (count === 0) continue;
+                const density = Math.min(1, count / 2);
+                const hue = mat.colorBase;
+                const rgb = hslToRgb(hue, 70, 55);
+                positionsArr.push(x, y, z);
+                colorsArr.push(rgb.r / 255, rgb.g / 255, rgb.b / 255, density * alphaScale);
+            }
+        }
+    }
+
+    const pos = new Float32Array(positionsArr);
+    const col = new Float32Array(colorsArr);
+    volumeGeometry.setAttribute('position', new window.THREE.BufferAttribute(pos, 3));
+    volumeGeometry.setAttribute('color', new window.THREE.BufferAttribute(col, 4));
+
+    if (!volumeMaterial) {
+        volumeMaterial = new window.THREE.PointsMaterial({
+            size: Math.max(10, PARTICLE_RADIUS * 3.0),
+            transparent: true,
+            vertexColors: true,
+            opacity: 0.85,
+            depthWrite: false,
+            blending: window.THREE.AdditiveBlending
+        });
+    }
+
+    if (!volumeMesh) {
+        volumeMesh = new window.THREE.Points(volumeGeometry, volumeMaterial);
+        volumeMesh.frustumCulled = false;
+        scene.add(volumeMesh);
+    } else {
+        volumeMesh.geometry = volumeGeometry;
+        volumeMesh.material = volumeMaterial;
+    }
+    volumeMesh.visible = true;
+}
+
+function ensureThree() {
+    if (window.THREE) return Promise.resolve(window.THREE);
+    if (threeLoad) return threeLoad;
+    threeLoad = import('https://unpkg.com/three@0.160.0/build/three.module.js')
+        .then((mod) => {
+            window.THREE = mod;
+            return window.THREE;
+        })
+        .catch((err) => {
+            throw new Error(`Failed to load Three.js: ${err.message}`);
+        });
+    return threeLoad;
+}
+
+function init3D() {
+    if (!window.THREE) return;
+    const THREE = window.THREE;
+    if (!renderer3d) {
+        renderer3d = new THREE.WebGLRenderer({ canvas: canvas3d, antialias: true });
+        renderer3d.setClearColor(0x111111, 1);
+        scene = new THREE.Scene();
+        camera = new THREE.PerspectiveCamera(60, simWidth / simHeight, 1, 9000);
+        camera.position.set(0, 0, 380);
+        renderer3d.setPixelRatio(dpr);
+        heatPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
+    }
+
+    const count = particles.length;
+    positions = new Float32Array(count * 3);
+    colors = new Float32Array(count * 3);
+    geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+    pointsMaterial = new THREE.PointsMaterial({
+        size: PARTICLE_RADIUS * 1.4,
+        vertexColors: true,
+        transparent: true,
+        opacity: 1
+    });
+
+    if (points) scene.remove(points);
+    points = new THREE.Points(geometry, pointsMaterial);
+    points.frustumCulled = false;
+    scene.add(points);
+
+    tracerGeometry = new THREE.BufferGeometry();
+    tracerMaterial = new THREE.LineBasicMaterial({
+        color: 0xff9966,
+        transparent: true,
+        opacity: 0.5
+    });
+    tracerMesh = new THREE.LineSegments(tracerGeometry, tracerMaterial);
+    tracerMesh.frustumCulled = false;
+    scene.add(tracerMesh);
+
+    renderer3d.setSize(simWidth, simHeight, false);
+    updateBoundsMesh();
+    updateVolumeMesh();
+}
+
+function draw3D() {
+    if (!renderer3d || !points || !geometry) return;
+    const mat = materials[currentMaterialKey];
+    const centerX = simWidth / 2;
+    const centerY = simHeight / 2;
+
+    const cp = Math.cos(orbitPitch);
+    const renderScale = Math.max(1, orbitDistance / 320);
+    const camX = orbitDistance * Math.sin(orbitYaw) * cp + panX;
+    const camY = orbitDistance * Math.sin(orbitPitch) + panY;
+    const camZ = orbitDistance * Math.cos(orbitYaw) * cp;
+    camera.position.set(camX, camY, camZ);
+    camera.lookAt(panX, panY, 0);
+
+    const extent = Math.max(simWidth, simHeight, SIM_DEPTH) * renderScale;
+    const desiredFar = Math.max(2000, orbitDistance + extent * 2);
+    if (Math.abs(desiredFar - cameraFar) > 50) {
+        cameraFar = desiredFar;
+        camera.far = cameraFar;
+        camera.updateProjectionMatrix();
+    }
+
+    if (points) points.scale.set(renderScale, renderScale, renderScale);
+    if (boundsMesh) boundsMesh.scale.set(renderScale, renderScale, renderScale);
+    if (volumeMesh) volumeMesh.scale.set(renderScale, renderScale, renderScale);
+    if (tracerMesh) tracerMesh.scale.set(renderScale, renderScale, renderScale);
+
+    if (pointsMaterial) {
+        const isGas = materials[currentMaterialKey].density < 0.01;
+        const farZoom = orbitDistance > 900;
+        if (isGas && orbitDistance > 420) {
+            pointsMaterial.size = PARTICLE_RADIUS * 1.6;
+            pointsMaterial.opacity = Math.min(0.45, 0.2 + orbitDistance / 2200);
+        } else if (farZoom) {
+            pointsMaterial.size = PARTICLE_RADIUS * 2.0;
+            pointsMaterial.opacity = 0.9;
+        } else {
+            pointsMaterial.size = PARTICLE_RADIUS * 1.4;
+            pointsMaterial.opacity = 1.0;
+        }
+    }
+
+    if (tracerMesh) {
+        const enableTracers = tracerToggle && tracerToggle.checked && simMode === 'fluid';
+        tracerMesh.visible = enableTracers;
+        if (enableTracers) {
+            const segments = (TRAIL_LENGTH - 1) * particles.length;
+            const linePositions = new Float32Array(segments * 6);
+            let out = 0;
+            for (let i = 0; i < particles.length; i++) {
+                const p = particles[i];
+                const count = p.trailCount;
+                if (count < 2) continue;
+                for (let k = 0; k < count - 1; k++) {
+                    const a = (p.trailIndex + k) % TRAIL_LENGTH;
+                    const b = (p.trailIndex + k + 1) % TRAIL_LENGTH;
+                    const ax = p.trail[a * 3] - centerX;
+                    const ay = -(p.trail[a * 3 + 1] - centerY);
+                    const az = p.trail[a * 3 + 2];
+                    const bx = p.trail[b * 3] - centerX;
+                    const by = -(p.trail[b * 3 + 1] - centerY);
+                    const bz = p.trail[b * 3 + 2];
+                    linePositions[out++] = ax;
+                    linePositions[out++] = ay;
+                    linePositions[out++] = az;
+                    linePositions[out++] = bx;
+                    linePositions[out++] = by;
+                    linePositions[out++] = bz;
+                }
+            }
+            tracerGeometry.setAttribute('position', new window.THREE.BufferAttribute(linePositions, 3));
+            tracerGeometry.attributes.position.needsUpdate = true;
+        }
+    }
+
+    updateVolumeMesh();
+
+    for (let i = 0; i < particles.length; i++) {
+        const p = particles[i];
+        const idx = i * 3;
+        positions[idx] = p.x - centerX;
+        positions[idx + 1] = -(p.y - centerY);
+        const heat = Math.min(p.temp / 8.0, 1);
+        positions[idx + 2] = p.z;
+
+        const hue = mat.colorBase + (0 - mat.colorBase) * heat;
+        const light = 40 + (60 * heat);
+        const rgb = hslToRgb(hue, 80 + heat * 20, light);
+        colors[idx] = rgb.r / 255;
+        colors[idx + 1] = rgb.g / 255;
+        colors[idx + 2] = rgb.b / 255;
+    }
+
+    geometry.attributes.position.needsUpdate = true;
+    geometry.attributes.color.needsUpdate = true;
+    renderer3d.render(scene, camera);
+}
+
+function setRenderer(mode) {
+    rendererMode = mode;
+    if (rendererMode === '3d') {
+        canvas.style.display = 'none';
+        if (canvas3d) canvas3d.style.display = 'block';
+        initLattice();
+        ensureThree()
+            .then(() => {
+                init3D();
+                updateInstructions();
+            })
+            .catch(err => {
+                console.warn(err);
+                rendererMode = '2d';
+                canvas.style.display = 'block';
+                if (canvas3d) canvas3d.style.display = 'none';
+                if (rendererSelect) rendererSelect.value = '2d';
+                updateInstructions();
+            });
+    } else {
+        canvas.style.display = 'block';
+        if (canvas3d) canvas3d.style.display = 'none';
+        initLattice();
+        updateInstructions();
+    }
+}
+
 /**
  * PHYSICS ENGINE
  */
 function solveInteractions() {
     // Simple O(N^2) solver. For <1000 particles this is fine on modern devices.
     // Ideally, use a spatial grid for optimization if N > 1000.
+    const use3d = rendererMode === '3d';
     
     // Decay broken bonds (frame-based healing)
     if (brokenBonds.size > 0) {
@@ -403,7 +996,8 @@ function solveInteractions() {
 
             const dx = p2.x - p1.x;
             const dy = p2.y - p1.y;
-            const distSq = dx*dx + dy*dy;
+            const dz = use3d ? (p2.z - p1.z) : 0;
+            const distSq = dx*dx + dy*dy + dz*dz;
 
             // Optimization: ignore far particles
             if (distSq > physicsParams.interactionRadius * physicsParams.interactionRadius) continue;
@@ -418,6 +1012,7 @@ function solveInteractions() {
             
             const normalX = dx / dist;
             const normalY = dy / dist;
+            const normalZ = dz / dist;
 
             const lattice = physicsParams.latticeSpacing;
 
@@ -437,8 +1032,10 @@ function solveInteractions() {
                 } else {
                     p1.vx += bondForce * normalX;
                     p1.vy += bondForce * normalY;
+                    p1.vz += bondForce * normalZ;
                     p2.vx -= bondForce * normalX;
                     p2.vy -= bondForce * normalY;
+                    p2.vz -= bondForce * normalZ;
                 }
             } else {
                 // Non-neighbor interactions: mainly short-range repulsion to avoid overlaps
@@ -446,12 +1043,165 @@ function solveInteractions() {
                     const rep = -(lattice * 0.85 - dist) * physicsParams.repulsion * 1.2;
                     p1.vx += rep * normalX;
                     p1.vy += rep * normalY;
+                    p1.vz += rep * normalZ;
                     p2.vx -= rep * normalX;
                     p2.vy -= rep * normalY;
+                    p2.vz -= rep * normalZ;
                 }
                 // Optionally, weak long-range attraction for condensed phases (handled by restoring/global springs)
             }
         }
+    }
+}
+
+function buildNeighborLists(cellSize) {
+    const grid = new Map();
+    const lists = new Array(particles.length);
+    const use3d = rendererMode === '3d';
+    const halfDepth = SIM_DEPTH / 2;
+
+    for (let i = 0; i < particles.length; i++) {
+        const p = particles[i];
+        const cx = Math.floor(p.x / cellSize);
+        const cy = Math.floor(p.y / cellSize);
+        const cz = use3d ? Math.floor((p.z + halfDepth) / cellSize) : 0;
+        const key = `${cx},${cy},${cz}`;
+        if (!grid.has(key)) grid.set(key, []);
+        grid.get(key).push(i);
+    }
+
+    for (let i = 0; i < particles.length; i++) {
+        const p = particles[i];
+        const cx = Math.floor(p.x / cellSize);
+        const cy = Math.floor(p.y / cellSize);
+        const cz = use3d ? Math.floor((p.z + halfDepth) / cellSize) : 0;
+        const neighbors = [];
+
+        for (let oz = -1; oz <= 1; oz++) {
+            if (!use3d && oz !== 0) continue;
+            for (let oy = -1; oy <= 1; oy++) {
+                for (let ox = -1; ox <= 1; ox++) {
+                    const key = `${cx + ox},${cy + oy},${cz + oz}`;
+                    const bucket = grid.get(key);
+                    if (bucket) neighbors.push(...bucket);
+                }
+            }
+        }
+
+        lists[i] = neighbors;
+    }
+
+    return lists;
+}
+
+function solveFluid() {
+    const h = fluidParams.smoothingRadius;
+    const invH = 1 / h;
+    const cellSize = h;
+    const use3d = rendererMode === '3d';
+    const neighborLists = buildNeighborLists(cellSize);
+
+    for (let i = 0; i < particles.length; i++) {
+        const p = particles[i];
+        p.prevX = p.x;
+        p.prevY = p.y;
+        p.prevZ = p.z;
+        p.applyHeatNoise();
+    }
+
+    for (let i = 0; i < particles.length; i++) {
+        const p = particles[i];
+        let density = 0;
+        const neighbors = neighborLists[i];
+        for (let n = 0; n < neighbors.length; n++) {
+            const j = neighbors[n];
+            const pj = particles[j];
+            const dx = pj.x - p.x;
+            const dy = pj.y - p.y;
+            const dz = use3d ? (pj.z - p.z) : 0;
+            const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
+            if (dist < h) {
+                const q = 1 - dist * invH;
+                density += fluidParams.mass * q * q;
+            }
+        }
+        p.density = Math.max(density, 0.001);
+        p.pressure = Math.max(0, fluidParams.gasConstant * (p.density - fluidParams.restDensity));
+    }
+
+    const dt = fluidParams.timeStep;
+    for (let i = 0; i < particles.length; i++) {
+        const p = particles[i];
+        let fx = 0;
+        let fy = 0;
+        let fz = 0;
+        let xsphX = 0;
+        let xsphY = 0;
+        let xsphZ = 0;
+        const neighbors = neighborLists[i];
+        const tensionActive = fluidParams.surfaceTension > 0
+            && p.density < fluidParams.restDensity * fluidParams.surfaceThreshold;
+
+        for (let n = 0; n < neighbors.length; n++) {
+            const j = neighbors[n];
+            if (j == i) continue;
+            const pj = particles[j];
+            const dx = pj.x - p.x;
+            const dy = pj.y - p.y;
+            const dz = use3d ? (pj.z - p.z) : 0;
+            const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
+            if (dist <= 0 || dist >= h) continue;
+
+            const q = 1 - dist * invH;
+            const weight = q * q;
+            const dirX = dx / dist;
+            const dirY = dy / dist;
+            const dirZ = dz / dist;
+
+            const pressure = (p.pressure + pj.pressure) * 0.5;
+            const pressureForce = -pressure * q;
+            fx += dirX * pressureForce;
+            fy += dirY * pressureForce;
+            fz += dirZ * pressureForce;
+
+            const visc = fluidParams.viscosity * weight;
+            fx += (pj.vx - p.vx) * visc;
+            fy += (pj.vy - p.vy) * visc;
+            fz += (pj.vz - p.vz) * visc;
+
+            if (tensionActive) {
+                const tension = fluidParams.surfaceTension * weight;
+                fx += dirX * tension;
+                fy += dirY * tension;
+                fz += dirZ * tension;
+            }
+
+            xsphX += (pj.vx - p.vx) * weight;
+            xsphY += (pj.vy - p.vy) * weight;
+            xsphZ += (pj.vz - p.vz) * weight;
+        }
+
+        const invDensity = 1 / p.density;
+        p.vx += fx * invDensity * dt;
+        p.vy += (fy * invDensity + physicsParams.gravity) * dt;
+        if (use3d) {
+            p.vz += fz * invDensity * dt;
+        }
+        if (fluidParams.xsph > 0) {
+            const xsph = fluidParams.xsph * dt * invDensity;
+            p.vx += xsph * xsphX;
+            p.vy += xsph * xsphY;
+            if (use3d) {
+                p.vz += xsph * xsphZ;
+            }
+        }
+
+        p.x += p.vx;
+        p.y += p.vy;
+        if (use3d) {
+            p.z += p.vz;
+        }
+        p.recordTrail();
     }
 }
 
@@ -460,101 +1210,347 @@ function solveInteractions() {
  */
 function initLattice() {
     particles = [];
+    brokenBonds.clear();
     const lattice = physicsParams.latticeSpacing;
-    const startX = (canvas.width - (COLS * lattice)) / 2;
-    const startY = (canvas.height - (ROWS * lattice * 0.866)) / 2;
+    const use3d = rendererMode === '3d';
+    latticeOffsetY = 0;
+    latticeVy = 0;
 
-    for (let row = 0; row < ROWS; row++) {
-        for (let col = 0; col < COLS; col++) {
-            // Hexagonal Offset
-            const xOffset = (row % 2 === 0) ? 0 : lattice / 2;
-
-            const x = startX + (col * lattice) + xOffset;
-            const y = startY + (row * (lattice * 0.866)); // 0.866 is sin(60deg)
-
-            // Add random noise so they aren't perfectly frozen
-            // Pass the resting lattice coordinates into the Particle so it can be pulled back when cooled.
-            const p = new Particle(x, y);
-            p.row = row;
-            p.col = col;
-            particles.push(p);
-        }
+    const limit = countSlider ? parseInt(countSlider.value) : 1500;
+    const maxParticles = isMobile
+        ? Math.min(350, limit)
+        : Math.max(200, limit);
+    let cols = Math.max(6, Math.floor(simWidth / lattice));
+    let rows = Math.max(6, Math.floor(simHeight / (lattice * 0.866)));
+    let layers = use3d ? Math.max(2, Math.floor(SIM_DEPTH / (lattice * 1.1))) : 1;
+    if (use3d) {
+        const minLayers = Math.ceil(maxParticles / (rows * cols));
+        layers = Math.max(layers, Math.min(minLayers, Math.max(2, Math.floor(SIM_DEPTH / (lattice * 0.7)))));
     }
 
-    // Build neighbor sets for hex lattice (for bond tracking)
+    let total = rows * cols * layers;
+    if (total > maxParticles) {
+        if (use3d) {
+            const scale = Math.cbrt(maxParticles / total);
+            cols = Math.max(4, Math.floor(cols * scale));
+            rows = Math.max(4, Math.floor(rows * scale));
+            layers = Math.max(2, Math.floor(layers * scale));
+        } else {
+            const scale = Math.sqrt(maxParticles / total);
+            cols = Math.max(6, Math.floor(cols * scale));
+            rows = Math.max(6, Math.floor(rows * scale));
+        }
+        total = rows * cols * layers;
+    }
+
+    gridRows = rows;
+    gridCols = cols;
+    gridLayers = layers;
+    latticeMinRestY = Infinity;
+    latticeMaxRestY = -Infinity;
+
+    const startX = (simWidth - (gridCols * lattice)) / 2;
+    const startY = (simHeight - (gridRows * lattice * 0.866)) / 2;
+    const layerSpacing = lattice * 0.9;
+    const startZ = use3d ? -((gridLayers - 1) * layerSpacing) / 2 : 0;
+
+    let created = 0;
+    const targetCount = Math.min(maxParticles, total);
+    for (let layer = 0; layer < gridLayers; layer++) {
+        const z = startZ + layer * layerSpacing;
+        for (let row = 0; row < gridRows; row++) {
+            for (let col = 0; col < gridCols; col++) {
+                if (created >= targetCount) break;
+                const xOffset = (row % 2 === 0) ? 0 : lattice / 2;
+                const x = startX + (col * lattice) + xOffset;
+                const y = startY + (row * (lattice * 0.866));
+
+                const p = new Particle(x, y);
+                p.restZ = use3d ? z : 0;
+                p.z = use3d ? (z + (Math.random() - 0.5) * 1.5) : 0;
+                p.row = row;
+                p.col = col;
+                p.layer = layer;
+                particles.push(p);
+                if (y < latticeMinRestY) latticeMinRestY = y;
+                if (y > latticeMaxRestY) latticeMaxRestY = y;
+                created++;
+            }
+            if (created >= targetCount) break;
+        }
+        if (created >= targetCount) break;
+    }
+
     for (let i = 0; i < particles.length; i++) {
         const p = particles[i];
         const r = p.row;
         const c = p.col;
+        const l = p.layer || 0;
         p.neighborSet = new Set();
 
-        // neighbor helper
-        const tryAdd = (rr, cc) => {
-            if (rr < 0 || rr >= ROWS || cc < 0 || cc >= COLS) return;
-            const idx = rr * COLS + cc;
+        const tryAdd = (rr, cc, ll) => {
+            if (rr < 0 || rr >= gridRows || cc < 0 || cc >= gridCols) return;
+            if (ll < 0 || ll >= gridLayers) return;
+            const idx = (ll * gridRows * gridCols) + (rr * gridCols) + cc;
             p.neighborSet.add(idx);
         };
 
-        // left / right
-        tryAdd(r, c-1);
-        tryAdd(r, c+1);
+        tryAdd(r, c - 1, l);
+        tryAdd(r, c + 1, l);
 
         if (r % 2 === 0) {
-            tryAdd(r-1, c-1);
-            tryAdd(r-1, c);
-            tryAdd(r+1, c-1);
-            tryAdd(r+1, c);
+            tryAdd(r - 1, c - 1, l);
+            tryAdd(r - 1, c, l);
+            tryAdd(r + 1, c - 1, l);
+            tryAdd(r + 1, c, l);
         } else {
-            tryAdd(r-1, c);
-            tryAdd(r-1, c+1);
-            tryAdd(r+1, c);
-            tryAdd(r+1, c+1);
+            tryAdd(r - 1, c, l);
+            tryAdd(r - 1, c + 1, l);
+            tryAdd(r + 1, c, l);
+            tryAdd(r + 1, c + 1, l);
+        }
+
+        if (use3d) {
+            tryAdd(r, c, l - 1);
+            tryAdd(r, c, l + 1);
         }
     }
+
+    if (countVal) countVal.innerText = String(particles.length);
 }
 
 function animate() {
-    // Clear Canvas
-    ctx.fillStyle = 'rgba(17, 17, 17, 0.4)'; // Trail effect
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-    // Physics Steps
-    solveInteractions();
-    particles.forEach(p => {
-        p.update();
-        p.draw();
-    });
-
     requestAnimationFrame(animate);
+
+    if (rendererMode === '2d') {
+        draw2DBackground();
+    }
+
+    if (simMode === 'fluid') {
+        solveFluid();
+        particles.forEach(p => {
+            p.applyDamping();
+            p.applyBounds();
+            p.updateTemp();
+        });
+    } else {
+        if (physicsParams.gravity !== 0) {
+            latticeVy += physicsParams.gravity;
+            latticeOffsetY += latticeVy;
+            latticeVy *= 0.92;
+            const maxOffset = (simHeight - PARTICLE_RADIUS) - latticeMaxRestY;
+            const minOffset = PARTICLE_RADIUS - latticeMinRestY;
+            if (latticeOffsetY > maxOffset) {
+                latticeOffsetY = maxOffset;
+                latticeVy *= -0.5;
+            } else if (latticeOffsetY < minOffset) {
+                latticeOffsetY = minOffset;
+                latticeVy *= -0.5;
+            }
+        }
+        solveInteractions();
+        particles.forEach(p => p.update());
+    }
+
+    if (rendererMode === '2d') {
+        particles.forEach(p => p.draw());
+    } else if (rendererMode === '3d') {
+        draw3D();
+    }
 }
 
 /**
  * EVENT LISTENERS
  */
 function resize() {
-    canvas.width = window.innerWidth;
-    canvas.height = window.innerHeight;
+    simWidth = window.innerWidth;
+    simHeight = window.innerHeight;
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+
+    canvas.style.width = `${simWidth}px`;
+    canvas.style.height = `${simHeight}px`;
+    canvas.width = Math.floor(simWidth * dpr);
+    canvas.height = Math.floor(simHeight * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    if (canvas3d) {
+        canvas3d.style.width = `${simWidth}px`;
+        canvas3d.style.height = `${simHeight}px`;
+        if (renderer3d && camera) {
+            camera.aspect = simWidth / simHeight;
+            camera.updateProjectionMatrix();
+            renderer3d.setPixelRatio(dpr);
+            renderer3d.setSize(simWidth, simHeight, false);
+        }
+    }
+    if (rendererMode === '3d') updateBoundsMesh();
+
     initLattice();
 }
 
 window.addEventListener('resize', resize);
 resize(); // Initial call
 
-// Mouse interaction
-window.addEventListener('mousedown', e => { mouse.isDown = true; mouse.x = e.clientX; mouse.y = e.clientY; });
-window.addEventListener('mousemove', e => { mouse.x = e.clientX; mouse.y = e.clientY; });
-window.addEventListener('mouseup',   e => { mouse.isDown = false; });
+// Pointer interaction
+window.addEventListener('pointerdown', e => {
+    const controls = document.getElementById('controls');
+    if (controls && controls.contains(e.target)) return;
+
+    activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+    if (rendererMode === '3d') {
+        if (activePointers.size === 1) {
+            if (e.shiftKey) {
+                cameraDrag = false;
+                panDrag = false;
+            } else if (e.button === 2 || e.button === 1) {
+                panDrag = true;
+                lastPanX = e.clientX;
+                lastPanY = e.clientY;
+            } else {
+                cameraDrag = true;
+                lastPointerX = e.clientX;
+                lastPointerY = e.clientY;
+            }
+        } else if (activePointers.size === 2) {
+            const pts = Array.from(activePointers.values());
+            lastPinchDistance = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+            lastPanX = (pts[0].x + pts[1].x) / 2;
+            lastPanY = (pts[0].y + pts[1].y) / 2;
+        }
+    }
+
+    const allowHeat = rendererMode !== '3d' || e.shiftKey;
+    mouse.isDown = allowHeat;
+    mouse.x = e.clientX;
+    mouse.y = e.clientY;
+    updateHeatPointFromPointer(e.clientX, e.clientY);
+    if (e.target && e.target.setPointerCapture) {
+        try { e.target.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
+    }
+});
+window.addEventListener('pointermove', e => {
+    if (activePointers.has(e.pointerId)) {
+        activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    }
+
+    if (rendererMode === '3d') {
+        if (activePointers.size === 2 && lastPinchDistance && !e.shiftKey) {
+            const pts = Array.from(activePointers.values());
+            const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+            const delta = dist - lastPinchDistance;
+            orbitDistance = Math.max(140, Math.min(6000, orbitDistance - delta * 1.2));
+            lastPinchDistance = dist;
+            const cx = (pts[0].x + pts[1].x) / 2;
+            const cy = (pts[0].y + pts[1].y) / 2;
+            const panScale = orbitDistance / 500;
+            panX -= (cx - lastPanX) * panScale;
+            panY += (cy - lastPanY) * panScale;
+            lastPanX = cx;
+            lastPanY = cy;
+        } else if (cameraDrag && activePointers.size === 1 && !e.shiftKey) {
+            const dx = e.clientX - lastPointerX;
+            const dy = e.clientY - lastPointerY;
+            orbitYaw += dx * 0.005;
+            orbitPitch = Math.max(-1.2, Math.min(1.2, orbitPitch + dy * 0.005));
+            lastPointerX = e.clientX;
+            lastPointerY = e.clientY;
+        } else if (panDrag && activePointers.size === 1 && !e.shiftKey) {
+            const dx = e.clientX - lastPanX;
+            const dy = e.clientY - lastPanY;
+            const panScale = orbitDistance / 500;
+            panX -= dx * panScale;
+            panY += dy * panScale;
+            lastPanX = e.clientX;
+            lastPanY = e.clientY;
+        }
+    }
+
+    mouse.x = e.clientX;
+    mouse.y = e.clientY;
+    updateHeatPointFromPointer(e.clientX, e.clientY);
+});
+window.addEventListener('pointerup', e => {
+    activePointers.delete(e.pointerId);
+    if (activePointers.size < 2) lastPinchDistance = null;
+    if (activePointers.size === 0) {
+        mouse.isDown = false;
+        cameraDrag = false;
+        panDrag = false;
+    }
+});
+window.addEventListener('pointercancel', e => {
+    activePointers.delete(e.pointerId);
+    if (activePointers.size < 2) lastPinchDistance = null;
+    if (activePointers.size === 0) {
+        mouse.isDown = false;
+        cameraDrag = false;
+        panDrag = false;
+    }
+});
+
+    if (canvas3d) {
+        canvas3d.addEventListener('wheel', (e) => {
+            if (rendererMode !== '3d') return;
+            if (e.shiftKey) return;
+            e.preventDefault();
+            orbitDistance = Math.max(140, Math.min(6000, orbitDistance + e.deltaY * 0.9));
+        }, { passive: false });
+    }
+
+window.addEventListener('contextmenu', (e) => {
+    if (rendererMode === '3d' && canvas3d && canvas3d.contains(e.target)) {
+        e.preventDefault();
+    }
+});
+
+window.addEventListener('keydown', (e) => {
+    if (rendererMode !== '3d') return;
+    if (e.key === 'ArrowLeft') orbitYaw -= 0.06;
+    if (e.key === 'ArrowRight') orbitYaw += 0.06;
+    if (e.key === 'ArrowUp') orbitPitch = Math.max(-1.2, Math.min(1.2, orbitPitch - 0.06));
+    if (e.key === 'ArrowDown') orbitPitch = Math.max(-1.2, Math.min(1.2, orbitPitch + 0.06));
+    if (e.key === '+' || e.key === '=') orbitDistance = Math.max(140, orbitDistance - 80);
+    if (e.key === '-' || e.key === '_') orbitDistance = Math.min(6000, orbitDistance + 80);
+    if (e.key === 'w') panY += 10;
+    if (e.key === 's') panY -= 10;
+    if (e.key === 'a') panX -= 10;
+    if (e.key === 'd') panX += 10;
+});
+
+canvas.style.touchAction = 'none';
+if (canvas3d) canvas3d.style.touchAction = 'none';
 
 // UI Controls
 const matSelect = document.getElementById('materialSelect');
+const rendererSelect = document.getElementById('rendererSelect');
+const modeSelect = document.getElementById('modeSelect');
+const viscSlider = document.getElementById('viscSlider');
+const compSlider = document.getElementById('compSlider');
+const surfSlider = document.getElementById('surfSlider');
+const xsphSlider = document.getElementById('xsphSlider');
+const viscVal = document.getElementById('viscVal');
+const compVal = document.getElementById('compVal');
+const surfVal = document.getElementById('surfVal');
+const xsphVal = document.getElementById('xsphVal');
+const instructionsText = document.getElementById('instructionsText');
 const tempSlider = document.getElementById('tempSlider');
 const tempInput = document.getElementById('tempInput');
 const bondSlider = document.getElementById('bondSlider');
 const gravSlider = document.getElementById('gravitySlider');
 const resetBtn = document.getElementById('resetBtn');
+countSlider = document.getElementById('countSlider');
+countVal = document.getElementById('countVal');
+boundsToggle = document.getElementById('boundsToggle');
+const tracerToggle = document.getElementById('tracerToggle');
+
+let currentMaterialKey = matSelect.value;
 
 function updatePhysics() {
-    const mat = materials[matSelect.value];
+    currentMaterialKey = matSelect.value;
+    const mat = materials[currentMaterialKey];
+    simMode = modeSelect ? modeSelect.value : simMode;
+    document.body.classList.toggle('mode-fluid', simMode === 'fluid');
     // If material changed, rebuild lattice to match its latticeSpacing
     if (updatePhysics._lastMaterial !== matSelect.value) {
         updatePhysics._lastMaterial = matSelect.value;
@@ -587,8 +1583,9 @@ function updatePhysics() {
     physicsParams.interParticleAttraction = (Math.abs(mat.bondBase || mat.attraction || 0)) * (1 + bondMult * 1.5) * (1 + cooled * 1.8 + crashFactor * 3.5);
 
     // Restoring spring force toward lattice positions (positive spring constant)
-    const baseRest = Math.max(0.00025, Math.abs(mat.bondBase || mat.attraction) * 0.06);
-    physicsParams.restoring = baseRest * (1 + bondMult * 3.0) * (1 + cooled * 6.0 + crashFactor * 9.0);
+    const baseRest = Math.max(0.00025, Math.abs((mat.bondBase || mat.attraction || 0)) * 0.06);
+    const restScale = Math.max(0, cooled);
+    physicsParams.restoring = baseRest * (1 + bondMult * 3.0) * restScale * (1 + crashFactor * 2.5);
 
     // Adjust interaction radius to cover neighbors (useful when latticeSpacing is large)
     physicsParams.interactionRadius = physicsParams.latticeSpacing * 3.2;
@@ -596,9 +1593,36 @@ function updatePhysics() {
     // Bond break threshold can be adjusted per-material
     physicsParams.bondBreakThreshold = mat.breakThreshold || physicsParams.bondBreakThreshold;
 
-    // Gravity scales with the gravity slider but is multiplied by the material density
-    const gravVal = parseInt(gravSlider.value) / 100;
-    physicsParams.gravity = gravVal * (mat.density || 1);
+    // Gravity scales with the slider and uses a density-normalized factor so gases still respond
+    const gravVal = parseInt(gravSlider.value) / 20;
+    const baseGravity = mat.gravity ?? 0;
+    const density = Math.max(0.01, mat.density ?? 1);
+    const gravityScale = Math.max(0.35, Math.sqrt(density));
+    physicsParams.gravity = baseGravity + gravVal * gravityScale;
+
+    if (simMode === 'fluid') {
+        const visc = (viscSlider ? parseInt(viscSlider.value) : 8) / 100;
+        const comp = (compSlider ? parseInt(compSlider.value) : 30);
+        const surf = (surfSlider ? parseInt(surfSlider.value) : 2) / 100;
+        const xsph = (xsphSlider ? parseInt(xsphSlider.value) : 12) / 100;
+        fluidParams.viscosity = visc;
+        fluidParams.gasConstant = comp;
+        fluidParams.surfaceTension = surf;
+        fluidParams.xsph = xsph;
+        fluidParams.smoothingRadius = Math.max(18, physicsParams.latticeSpacing * 3.2);
+        fluidParams.restDensity = 8 + (1 - cooled) * 4;
+        fluidParams.timeStep = isMobile ? 1 / 50 : 1 / 60;
+        if (viscVal) viscVal.innerText = fluidParams.viscosity.toFixed(2);
+        if (compVal) compVal.innerText = Math.round(fluidParams.gasConstant);
+        if (surfVal) surfVal.innerText = fluidParams.surfaceTension.toFixed(2);
+        if (xsphVal) xsphVal.innerText = fluidParams.xsph.toFixed(2);
+    }
+
+    if (countVal && countSlider) {
+        countVal.innerText = countSlider.value;
+    }
+
+    if (boundsMesh) boundsMesh.visible = !!(boundsToggle && boundsToggle.checked);
 
     // UI text updates
     document.getElementById('tempVal').innerText = tempVal;
@@ -609,7 +1633,10 @@ function updatePhysics() {
     }
 
     // Show a coarse bond level (Low/Med/High)
-    const bondLabel = bondMult < 0.5 ? 'Low' : (bondMult < 1.25 ? 'Medium' : 'High');
+    if (bondSlider) bondSlider.disabled = simMode === 'fluid';
+    const bondLabel = simMode === 'fluid'
+        ? 'N/A'
+        : (bondMult < 0.5 ? 'Low' : (bondMult < 1.25 ? 'Medium' : 'High'));
     document.getElementById('bondVal').innerText = bondLabel;
 }
 
@@ -619,6 +1646,30 @@ tempSlider.addEventListener('input', updatePhysics);
 bondSlider.addEventListener('input', updatePhysics);
 gravSlider.addEventListener('input', updatePhysics);
 resetBtn.addEventListener('click', initLattice);
+
+if (modeSelect) modeSelect.addEventListener('change', () => {
+    initLattice();
+    updatePhysics();
+});
+if (viscSlider) viscSlider.addEventListener('input', updatePhysics);
+if (compSlider) compSlider.addEventListener('input', updatePhysics);
+if (surfSlider) surfSlider.addEventListener('input', updatePhysics);
+if (xsphSlider) xsphSlider.addEventListener('input', updatePhysics);
+if (countSlider) countSlider.addEventListener('input', () => {
+    if (countVal) countVal.innerText = countSlider.value;
+    initLattice();
+});
+if (boundsToggle) boundsToggle.addEventListener('change', updatePhysics);
+if (tracerToggle) tracerToggle.addEventListener('change', updatePhysics);
+updateInstructions();
+
+if (rendererSelect) {
+    if (isMobile) {
+        const opt3d = rendererSelect.querySelector('option[value="3d"]');
+        if (opt3d) opt3d.disabled = true;
+    }
+    rendererSelect.addEventListener('change', (e) => setRenderer(e.target.value));
+}
 
 // tempInput two-way binding & validation (if present)
 if (tempInput) {
@@ -677,6 +1728,7 @@ if (tempInput) {
 
 // Start
 updatePhysics();
+setRenderer("2d");
 animate();
 
 </script>
